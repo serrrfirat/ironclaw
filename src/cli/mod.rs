@@ -4,17 +4,20 @@
 //! - Running the agent (`run`)
 //! - Interactive onboarding wizard (`onboard`)
 //! - Managing configuration (`config list`, `config get`, `config set`)
+//! - Managing WASM channels (`channels list`, `channels install`)
 //! - Managing WASM tools (`tool install`, `tool list`, `tool remove`)
 //! - Managing MCP servers (`mcp add`, `mcp auth`, `mcp list`, `mcp test`)
 //! - Querying workspace memory (`memory search`, `memory read`, `memory write`)
 //! - Checking system health (`status`)
 
+mod channels;
 mod config;
 mod mcp;
 pub mod memory;
 pub mod status;
 mod tool;
 
+pub use channels::{ChannelsCommand, run_channels_command};
 pub use config::{ConfigCommand, run_config_command};
 pub use mcp::{McpCommand, run_mcp_command};
 pub use memory::{MemoryCommand, run_memory_command};
@@ -74,6 +77,10 @@ pub enum Command {
     #[command(subcommand)]
     Config(ConfigCommand),
 
+    /// Manage WASM channels
+    #[command(subcommand)]
+    Channels(ChannelsCommand),
+
     /// Manage WASM tools
     #[command(subcommand)]
     Tool(ToolCommand),
@@ -94,5 +101,16 @@ impl Cli {
     /// Check if we should run the agent (default behavior or explicit `run` command).
     pub fn should_run_agent(&self) -> bool {
         matches!(self.command, None | Some(Command::Run))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_channels_subcommand_is_supported() {
+        let parsed = Cli::try_parse_from(["ironclaw", "channels", "list"]);
+        assert!(parsed.is_ok());
     }
 }
