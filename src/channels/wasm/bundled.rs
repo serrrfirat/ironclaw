@@ -13,7 +13,7 @@ struct BundledChannel {
 
 /// Names of bundled channels shipped with IronClaw.
 pub fn bundled_channel_names() -> &'static [&'static str] {
-    &["telegram"]
+    &["telegram", "whatsapp"]
 }
 
 /// Install a bundled channel into a channels directory.
@@ -60,6 +60,14 @@ fn bundled_channel(name: &str) -> Option<BundledChannel> {
                 "../../../channels-src/telegram/telegram.capabilities.json"
             ),
         })
+    } else if name.eq_ignore_ascii_case("whatsapp") {
+        Some(BundledChannel {
+            name: "whatsapp",
+            wasm: include_bytes!("../../../channels-src/whatsapp/whatsapp.wasm"),
+            capabilities: include_bytes!(
+                "../../../channels-src/whatsapp/whatsapp.capabilities.json"
+            ),
+        })
     } else {
         None
     }
@@ -87,6 +95,23 @@ mod tests {
 
         assert!(dir.path().join("telegram.wasm").exists());
         assert!(dir.path().join("telegram.capabilities.json").exists());
+    }
+
+    #[test]
+    fn test_bundled_channel_names_contains_whatsapp() {
+        assert!(bundled_channel_names().contains(&"whatsapp"));
+    }
+
+    #[tokio::test]
+    async fn test_install_bundled_whatsapp_writes_files() {
+        let dir = tempdir().unwrap();
+
+        install_bundled_channel("whatsapp", dir.path(), false)
+            .await
+            .unwrap();
+
+        assert!(dir.path().join("whatsapp.wasm").exists());
+        assert!(dir.path().join("whatsapp.capabilities.json").exists());
     }
 
     #[tokio::test]

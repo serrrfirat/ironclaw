@@ -58,7 +58,7 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | HTTP webhook | ✅ | ✅ | - | axum with secret validation |
 | REPL (simple) | ✅ | ✅ | - | For testing |
 | WASM channels | ❌ | ✅ | - | IronClaw innovation |
-| WhatsApp | ✅ | ❌ | P1 | Baileys (Web) |
+| WhatsApp | ✅ | ✅ | - | WASM tool (Cloud API) |
 | Telegram | ✅ | ✅ | - | WASM tool (MTProto) |
 | Discord | ✅ | ❌ | P2 | discord.js |
 | Signal | ✅ | ❌ | P2 | signal-cli |
@@ -415,7 +415,7 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 - ✅ Gateway token auth
 
 ### P1 - High Priority
-- ❌ WhatsApp channel
+- ✅ WhatsApp channel
 - ❌ Multi-provider failover
 - ❌ Hooks system (beforeInbound, beforeToolCall, etc.)
 
