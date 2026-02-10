@@ -45,6 +45,9 @@ pub enum Error {
 
     #[error("Worker error: {0}")]
     Worker(#[from] WorkerError),
+
+    #[error("Hook error: {0}")]
+    Hook(#[from] crate::hooks::HookError),
 }
 
 /// Configuration-related errors.

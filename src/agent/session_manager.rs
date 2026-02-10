@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::agent::session::Session;
 use crate::agent::undo::UndoManager;
+use crate::hooks::HookRegistry;
 
 /// Key for mapping external thread IDs to internal ones.
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -25,6 +26,7 @@ pub struct SessionManager {
     sessions: RwLock<HashMap<String, Arc<Mutex<Session>>>>,
     thread_map: RwLock<HashMap<ThreadKey, Uuid>>,
     undo_managers: RwLock<HashMap<Uuid, Arc<Mutex<UndoManager>>>>,
+    hooks: Option<Arc<HookRegistry>>,
 }
 
 impl SessionManager {
@@ -34,7 +36,14 @@ impl SessionManager {
             sessions: RwLock::new(HashMap::new()),
             thread_map: RwLock::new(HashMap::new()),
             undo_managers: RwLock::new(HashMap::new()),
+            hooks: None,
         }
+    }
+
+    /// Attach a hook registry for session lifecycle events.
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     /// Get or create a session for a user.
@@ -56,6 +65,24 @@ impl SessionManager {
 
         let session = Arc::new(Mutex::new(Session::new(user_id)));
         sessions.insert(user_id.to_string(), Arc::clone(&session));
+
+        // Hook: OnSessionStart — fire-and-forget notification
+        if let Some(ref hooks) = self.hooks {
+            let hooks = Arc::clone(hooks);
+            let session_id = {
+                let sess = session.lock().await;
+                sess.id.to_string()
+            };
+            let user_id = user_id.to_string();
+            tokio::spawn(async move {
+                let event = crate::hooks::HookEvent::SessionStart {
+                    user_id,
+                    session_id,
+                };
+                let _ = hooks.run(&event).await;
+            });
+        }
+
         session
     }
 
@@ -194,16 +221,34 @@ impl SessionManager {
             return 0;
         }
 
-        // Collect thread IDs from stale sessions for cleanup
+        // Collect thread IDs and session IDs from stale sessions for cleanup
         let mut stale_thread_ids: Vec<Uuid> = Vec::new();
+        let mut stale_session_ids: Vec<(String, String)> = Vec::new(); // (user_id, session_id)
         {
             let sessions = self.sessions.read().await;
             for user_id in &stale_users {
                 if let Some(session) = sessions.get(user_id) {
                     if let Ok(sess) = session.try_lock() {
                         stale_thread_ids.extend(sess.threads.keys());
+                        stale_session_ids.push((user_id.clone(), sess.id.to_string()));
                     }
                 }
+            }
+        }
+
+        // Hook: OnSessionEnd — fire-and-forget for each stale session
+        if let Some(ref hooks) = self.hooks {
+            for (user_id, session_id) in &stale_session_ids {
+                let hooks = Arc::clone(hooks);
+                let user_id = user_id.clone();
+                let session_id = session_id.clone();
+                tokio::spawn(async move {
+                    let event = crate::hooks::HookEvent::SessionEnd {
+                        user_id,
+                        session_id,
+                    };
+                    let _ = hooks.run(&event).await;
+                });
             }
         }
 

@@ -12,6 +12,7 @@ use crate::agent::task::TaskOutput;
 use crate::context::{ContextManager, JobState};
 use crate::error::Error;
 use crate::history::Store;
+use crate::hooks::HookRegistry;
 use crate::llm::{
     ActionPlan, ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondResult, ToolSelection,
 };
@@ -29,6 +30,7 @@ pub struct WorkerDeps {
     pub safety: Arc<SafetyLayer>,
     pub tools: Arc<ToolRegistry>,
     pub store: Option<Arc<Store>>,
+    pub hooks: Arc<HookRegistry>,
     pub timeout: Duration,
     pub use_planning: bool,
 }
@@ -358,12 +360,14 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
                 let job_id = self.job_id;
                 let store = self.deps.store.clone();
 
+                let hooks = self.deps.hooks.clone();
                 async move {
                     let result = Self::execute_tool_inner(
                         tools,
                         context_manager,
                         safety,
                         store,
+                        hooks,
                         job_id,
                         &tool_name,
                         &params,
@@ -383,6 +387,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         context_manager: Arc<ContextManager>,
         safety: Arc<SafetyLayer>,
         store: Option<Arc<Store>>,
+        hooks: Arc<HookRegistry>,
         job_id: Uuid,
         tool_name: &str,
         params: &serde_json::Value,
@@ -402,6 +407,29 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             .into());
         }
 
+        // Hook: BeforeToolCall — allow hooks to modify or reject tool calls in jobs
+        let params = {
+            let event = crate::hooks::HookEvent::ToolCall {
+                tool_name: tool_name.to_string(),
+                parameters: params.clone(),
+                user_id: String::new(),
+                context: job_id.to_string(),
+            };
+            match hooks.run(&event).await {
+                Err(crate::hooks::HookError::Rejected { reason }) => {
+                    return Err(crate::error::ToolError::ExecutionFailed {
+                        name: tool_name.to_string(),
+                        reason: format!("Rejected by hook: {}", reason),
+                    }
+                    .into());
+                }
+                Ok(crate::hooks::HookOutcome::Continue { modified: Some(new_params) }) => {
+                    serde_json::from_str(&new_params).unwrap_or_else(|_| params.clone())
+                }
+                _ => params.clone(),
+            }
+        };
+
         // Get job context for the tool
         let job_ctx = context_manager.get_context(job_id).await?;
         if job_ctx.state == JobState::Cancelled {
@@ -413,7 +441,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         }
 
         // Validate tool parameters
-        let validation = safety.validator().validate_tool_params(params);
+        let validation = safety.validator().validate_tool_params(&params);
         if !validation.is_valid {
             let details = validation
                 .errors
@@ -674,6 +702,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             self.context_manager().clone(),
             self.safety().clone(),
             self.deps.store.clone(),
+            self.deps.hooks.clone(),
             self.job_id,
             tool_name,
             params,
