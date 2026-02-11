@@ -522,6 +522,11 @@ impl Agent {
             self.maybe_hydrate_thread(message, external_thread_id).await;
         }
 
+        // Hydrate thread from DB if it's a historical thread not in memory
+        if let Some(ref external_thread_id) = message.thread_id {
+            self.maybe_hydrate_thread(message, external_thread_id).await;
+        }
+
         // Resolve session and thread
         let (session, thread_id) = self
             .session_manager

@@ -955,7 +955,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Create session manager (shared between agent and web gateway)
     let session_manager = Arc::new(SessionManager::new().with_hooks(hooks.clone()));
-
     // Register job tools (sandbox deps auto-injected when container_job_manager is available)
     tools.register_job_tools(
         Arc::clone(&context_manager),

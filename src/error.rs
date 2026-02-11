@@ -42,7 +42,6 @@ pub enum Error {
 
     #[error("Hook error: {0}")]
     Hook(#[from] crate::hooks::HookError),
-
     #[error("Orchestrator error: {0}")]
     Orchestrator(#[from] OrchestratorError),
 
