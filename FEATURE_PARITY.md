@@ -213,7 +213,7 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | Auth plugins | ✅ | ❌ | |
 | Memory plugins | ✅ | ❌ | Custom backends |
 | Tool plugins | ✅ | ✅ | WASM tools |
-| Hook plugins | ✅ | ❌ | |
+| Hook plugins | ✅ | ✅ | WASM hooks via capabilities.json |
 | Provider plugins | ✅ | ❌ | |
 | Plugin CLI (`install`, `list`) | ✅ | ✅ | `tool` subcommand |
 | ClawHub registry | ✅ | ❌ | Discovery |
@@ -331,10 +331,10 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | `onSessionEnd` hook | ✅ | ✅ | P2 | |
 | `transcribeAudio` hook | ✅ | ❌ | P3 | |
 | `transformResponse` hook | ✅ | ✅ | P2 | |
-| Bundled hooks | ✅ | ❌ | P2 | |
-| Plugin hooks | ✅ | ❌ | P3 | |
-| Workspace hooks | ✅ | ❌ | P2 | Inline code |
-| Outbound webhooks | ✅ | ❌ | P2 | |
+| Bundled hooks | ✅ | ✅ | P2 | ContentFilter, LeakDetection, RateLimiting, AuditLogging |
+| Plugin hooks | ✅ | ✅ | P3 | WASM tools declare hooks in capabilities.json |
+| Workspace hooks | ✅ | ✅ | P2 | Declarative JSON via `hooks/*.hook.json` in workspace |
+| Outbound webhooks | ✅ | ✅ | P2 | Fire-and-forget HTTP POST with HMAC signing |
 | Heartbeat system | ✅ | ✅ | - | Periodic execution |
 | Gmail pub/sub | ✅ | ❌ | P3 | |
 
@@ -420,7 +420,7 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 - ✅ Telegram channel (WASM, DM pairing, caption, /start)
 - ❌ WhatsApp channel
 - ❌ Multi-provider failover
-- ✅ Hooks system (beforeInbound, beforeToolCall, beforeOutbound, onSessionStart, onSessionEnd, transformResponse)
+- ✅ Hooks system (11 hook points, bundled safety hooks, WASM plugin hooks, outbound webhooks)
 
 ### P2 - Medium Priority
 - ❌ Cron job scheduling

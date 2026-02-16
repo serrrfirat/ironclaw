@@ -523,6 +523,32 @@ impl Agent {
             }
         }
 
+        // Hook: AfterParse — allow hooks to inspect/modify the parsed submission
+        if let Submission::UserInput { ref content } = submission {
+            let event = crate::hooks::HookEvent::Parse {
+                user_id: message.user_id.clone(),
+                channel: message.channel.clone(),
+                raw_input: message.content.clone(),
+                parsed_intent: content.clone(),
+            };
+            match self.hooks().run(&event).await {
+                Err(crate::hooks::HookError::Rejected { reason }) => {
+                    return Ok(Some(format!("[Message rejected after parse: {}]", reason)));
+                }
+                Err(err) => {
+                    tracing::warn!("AfterParse hook error (fail-open): {}", err);
+                }
+                Ok(crate::hooks::HookOutcome::Continue {
+                    modified: Some(new_intent),
+                }) => {
+                    submission = Submission::UserInput {
+                        content: new_intent,
+                    };
+                }
+                _ => {}
+            }
+        }
+
         // Hydrate thread from DB if it's a historical thread not in memory
         if let Some(ref external_thread_id) = message.thread_id {
             self.maybe_hydrate_thread(message, external_thread_id).await;
@@ -903,6 +929,27 @@ impl Agent {
             )
             .await;
 
+        // Hook: BeforeAgenticLoop — allow hooks to inspect or reject before entering the loop
+        {
+            let event = crate::hooks::HookEvent::AgenticLoopStart {
+                user_id: message.user_id.clone(),
+                thread_id: thread_id.to_string(),
+                message_count: turn_messages.len(),
+            };
+            match self.hooks().run(&event).await {
+                Err(crate::hooks::HookError::Rejected { reason }) => {
+                    return Ok(SubmissionResult::response(format!(
+                        "[Agentic loop rejected: {}]",
+                        reason
+                    )));
+                }
+                Err(err) => {
+                    tracing::warn!("BeforeAgenticLoop hook error (fail-open): {}", err);
+                }
+                _ => {} // Informational — no modification supported
+            }
+        }
+
         // Run the agentic tool execution loop
         let result = self
             .run_agentic_loop(message, session.clone(), thread_id, turn_messages, false)
@@ -1151,6 +1198,29 @@ impl Agent {
             // Refresh tool definitions each iteration so newly built tools become visible
             let tool_defs = self.tools().tool_definitions().await;
 
+            // Hook: BeforeLlmCall — allow hooks to inspect or reject before calling the LLM
+            {
+                let event = crate::hooks::HookEvent::LlmCall {
+                    user_id: message.user_id.clone(),
+                    thread_id: thread_id.to_string(),
+                    message_count: context_messages.len(),
+                    tool_count: tool_defs.len(),
+                };
+                match self.hooks().run(&event).await {
+                    Err(crate::hooks::HookError::Rejected { reason }) => {
+                        return Err(crate::error::LlmError::InvalidResponse {
+                            provider: "agent".to_string(),
+                            reason: format!("LLM call rejected by hook: {}", reason),
+                        }
+                        .into());
+                    }
+                    Err(err) => {
+                        tracing::warn!("BeforeLlmCall hook error (fail-open): {}", err);
+                    }
+                    _ => {} // Informational — no modification supported
+                }
+            }
+
             // Call LLM with current context
             let context = ReasoningContext::new()
                 .with_messages(context_messages.clone())
@@ -1262,11 +1332,56 @@ impl Agent {
                             }
 
                             if !is_auto_approved {
+                                // Hook: BeforeApproval — allow hooks to skip or modify approval
+                                let mut approval_params = tc.arguments.clone();
+                                let approval_skipped = {
+                                    let event = crate::hooks::HookEvent::ApprovalRequest {
+                                        tool_name: tc.name.clone(),
+                                        user_id: message.user_id.clone(),
+                                        parameters: tc.arguments.clone(),
+                                        description: tool.description().to_string(),
+                                    };
+                                    match self.hooks().run(&event).await {
+                                        Err(crate::hooks::HookError::Rejected { reason }) => {
+                                            // Rejection means skip approval, push rejection into context
+                                            context_messages.push(ChatMessage::tool_result(
+                                                &tc.id,
+                                                &tc.name,
+                                                format!(
+                                                    "Tool approval rejected by hook: {}",
+                                                    reason
+                                                ),
+                                            ));
+                                            true // skip this tool call entirely
+                                        }
+                                        Ok(crate::hooks::HookOutcome::Continue {
+                                            modified: Some(new_params),
+                                        }) => {
+                                            if let Ok(parsed) = serde_json::from_str(&new_params) {
+                                                approval_params = parsed;
+                                            }
+                                            false
+                                        }
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                "BeforeApproval hook error (fail-open): {}",
+                                                err
+                                            );
+                                            false
+                                        }
+                                        _ => false,
+                                    }
+                                };
+
+                                if approval_skipped {
+                                    continue;
+                                }
+
                                 // Need approval - store pending request and return
                                 let pending = PendingApproval {
                                     request_id: Uuid::new_v4(),
                                     tool_name: tc.name.clone(),
-                                    parameters: tc.arguments.clone(),
+                                    parameters: approval_params,
                                     description: tool.description().to_string(),
                                     tool_call_id: tc.id.clone(),
                                     context_messages: context_messages.clone(),
@@ -1328,9 +1443,11 @@ impl Agent {
                             )
                             .await;
 
+                        let tool_start = std::time::Instant::now();
                         let tool_result = self
                             .execute_chat_tool(&tc.name, &tc.arguments, &job_ctx)
                             .await;
+                        let tool_elapsed = tool_start.elapsed();
 
                         let _ = self
                             .channels
@@ -1376,6 +1493,34 @@ impl Agent {
                                 }
                             }
                         }
+
+                        // Hook: AfterToolCall — allow hooks to inspect/modify the tool result
+                        let tool_result = {
+                            let (result_str, success) = match &tool_result {
+                                Ok(output) => (output.clone(), true),
+                                Err(e) => (e.to_string(), false),
+                            };
+                            let event = crate::hooks::HookEvent::ToolResult {
+                                tool_name: tc.name.clone(),
+                                user_id: message.user_id.clone(),
+                                result: result_str,
+                                success,
+                                elapsed_ms: tool_elapsed.as_millis() as u64,
+                            };
+                            match self.hooks().run(&event).await {
+                                Ok(crate::hooks::HookOutcome::Continue {
+                                    modified: Some(new_result),
+                                }) => {
+                                    // Replace the result with the modified content
+                                    Ok(new_result)
+                                }
+                                Err(err) => {
+                                    tracing::warn!("AfterToolCall hook error (fail-open): {}", err);
+                                    tool_result
+                                }
+                                _ => tool_result,
+                            }
+                        };
 
                         // If tool_auth returned awaiting_token, enter auth mode
                         // and short-circuit: return the instructions directly so

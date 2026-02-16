@@ -7,8 +7,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use ironclaw::{
     agent::{Agent, AgentDeps, SessionManager},
-    hooks::HookRegistry,
-    pairing::PairingStore,
     channels::{
         ChannelManager, GatewayChannel, HttpChannel, ReplChannel, WebhookServer,
         WebhookServerConfig,
@@ -24,6 +22,7 @@ use ironclaw::{
     config::Config,
     context::ContextManager,
     extensions::ExtensionManager,
+    hooks::{HookRegistry, register_workspace_hooks},
     llm::{SessionConfig, create_llm_provider, create_session_manager},
     orchestrator::{
         ContainerJobConfig, ContainerJobManager, OrchestratorApi, TokenStore,
@@ -458,6 +457,11 @@ async fn main() -> anyhow::Result<()> {
     tools.register_builtin_tools();
     tracing::info!("Registered {} built-in tools", tools.count());
 
+    // Create shared hook registry and register bundled defaults.
+    // These hooks are used for lifecycle interception in all agent flows.
+    let hooks = Arc::new(HookRegistry::new());
+    hooks.register_bundled_defaults(&safety).await;
+
     // Create embeddings provider if configured
     let embeddings: Option<Arc<dyn EmbeddingProvider>> = if config.embeddings.enabled {
         match config.embeddings.provider.as_str() {
@@ -585,7 +589,8 @@ async fn main() -> anyhow::Result<()> {
     // Both register into the shared ToolRegistry (RwLock-based) so concurrent writes are safe.
     let wasm_tools_future = async {
         if let Some(ref runtime) = wasm_tool_runtime {
-            let loader = WasmToolLoader::new(Arc::clone(runtime), Arc::clone(&tools));
+            let loader = WasmToolLoader::new(Arc::clone(runtime), Arc::clone(&tools))
+                .with_hooks(Arc::clone(&hooks));
 
             // Load installed tools from ~/.ironclaw/tools/
             match loader.load_from_dir(&config.wasm.tools_dir).await {
@@ -740,6 +745,7 @@ async fn main() -> anyhow::Result<()> {
             config.tunnel.public_url.clone(),
             "default".to_string(),
             db.clone(),
+            Some(Arc::clone(&hooks)),
         ));
         tools.register_extension_tools(Arc::clone(&manager));
         tracing::info!("Extension manager initialized with in-chat discovery tools");
@@ -1075,11 +1081,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Load workspace-defined hooks (hooks/*.hook.json).
+    if let Some(ref ws) = workspace {
+        match register_workspace_hooks(&hooks, ws).await {
+            Ok(count) if count > 0 => {
+                tracing::info!("Loaded {} workspace hook(s)", count);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!("Failed to load workspace hooks: {}", err);
+            }
+        }
+    }
+
     // Create context manager (shared between job tools and agent)
     let context_manager = Arc::new(ContextManager::new(config.agent.max_parallel_jobs));
-
-    // Create hook registry
-    let hooks = Arc::new(HookRegistry::new());
 
     // Create session manager (shared between agent and web gateway)
     let session_manager = Arc::new(SessionManager::new().with_hooks(hooks.clone()));

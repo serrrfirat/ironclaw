@@ -550,6 +550,29 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             });
         }
 
+        // Hook: AfterToolCall — allow hooks to inspect the tool result
+        {
+            let (result_str, success) = match &result {
+                Ok(Ok(output)) => {
+                    let s = serde_json::to_string(&output.result).unwrap_or_default();
+                    (s, true)
+                }
+                Ok(Err(e)) => (e.to_string(), false),
+                Err(_) => ("timeout".to_string(), false),
+            };
+            let event = crate::hooks::HookEvent::ToolResult {
+                tool_name: tool_name.to_string(),
+                user_id: job_ctx.user_id.clone(),
+                result: result_str,
+                success,
+                elapsed_ms: elapsed.as_millis() as u64,
+            };
+            if let Err(err) = deps.hooks.run(&event).await {
+                tracing::warn!("AfterToolCall hook error in worker (fail-open): {}", err);
+            }
+            // Worker hooks are informational only — we don't modify the result
+        }
+
         // Handle the result
         let output = result
             .map_err(|_| crate::error::ToolError::Timeout {

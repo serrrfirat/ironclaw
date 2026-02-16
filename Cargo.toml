@@ -95,6 +95,9 @@ secrecy = { version = "0.10", features = ["serde"] }
 # URL encoding for OAuth flow
 urlencoding = "2"
 
+# URL parsing and validation
+url = "2"
+
 # Open URLs in browser
 open = "5"
 
@@ -111,9 +114,13 @@ wasmparser = "0.220"  # WASM binary parsing for validation
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+hmac = "0.12"
 blake3 = "1"
 rand = "0.8"
 subtle = "2"  # Constant-time comparisons for token validation
+
+# Hex encoding for HMAC signatures
+hex = "0.4"
 
 # Multi-provider LLM support
 rig-core = "0.30"

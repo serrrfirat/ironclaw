@@ -39,6 +39,8 @@ use std::sync::Arc;
 
 use tokio::fs;
 
+use crate::hooks::HookRegistry;
+use crate::hooks::WasmHookWrapper;
 use crate::tools::registry::{ToolRegistry, WasmRegistrationError, WasmToolRegistration};
 use crate::tools::wasm::capabilities_schema::CapabilitiesFile;
 use crate::tools::wasm::{
@@ -77,12 +79,24 @@ pub enum WasmLoadError {
 pub struct WasmToolLoader {
     runtime: Arc<WasmToolRuntime>,
     registry: Arc<ToolRegistry>,
+    hook_registry: Option<Arc<HookRegistry>>,
 }
 
 impl WasmToolLoader {
     /// Create a new loader with the given runtime and registry.
     pub fn new(runtime: Arc<WasmToolRuntime>, registry: Arc<ToolRegistry>) -> Self {
-        Self { runtime, registry }
+        Self {
+            runtime,
+            registry,
+            hook_registry: None,
+        }
+    }
+
+    /// Attach a hook registry so WASM tools with hook declarations are
+    /// automatically registered as lifecycle hooks.
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hook_registry = Some(hooks);
+        self
     }
 
     /// Load a single WASM tool from a file pair.
@@ -126,6 +140,9 @@ impl WasmToolLoader {
             Capabilities::default()
         };
 
+        // Extract hook capabilities before consuming capabilities
+        let hook_caps = capabilities.hooks.clone();
+
         // Register the tool
         self.registry
             .register_wasm(WasmToolRegistration {
@@ -144,6 +161,23 @@ impl WasmToolLoader {
             wasm_path = %wasm_path.display(),
             "Loaded WASM tool from file"
         );
+
+        // If the tool declares hooks and we have a hook registry, register it
+        if let (Some(hook_caps), Some(hook_registry)) = (hook_caps, &self.hook_registry)
+            && let Some(tool) = self.registry.get(name).await
+        {
+            let wrapper = WasmHookWrapper::new(
+                format!("wasm:{}", name),
+                hook_caps.points,
+                hook_caps.failure_mode,
+                hook_caps.timeout,
+                tool,
+            );
+            hook_registry
+                .register_with_priority(Arc::new(wrapper), hook_caps.priority)
+                .await;
+            tracing::info!(name = name, "Registered WASM tool as lifecycle hook");
+        }
 
         Ok(())
     }
@@ -528,10 +562,36 @@ pub struct DiscoveredTool {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
+    use crate::hooks::HookRegistry;
+    use crate::tools::registry::ToolRegistry;
+    use crate::tools::wasm::WasmToolLoader;
+    use crate::tools::wasm::{WasmRuntimeConfig, WasmToolRuntime};
     use tempfile::TempDir;
 
-    use crate::tools::wasm::loader::{WasmLoadError, discover_tools};
+    use crate::tools::wasm::{WasmLoadError, discover_tools};
+
+    fn hooks_json(points: &[&str], priority: u32) -> String {
+        let points_json = points
+            .iter()
+            .map(|p| format!("\"{}\"", p))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\n  \"hooks\": {{\n    \"points\": [{}],\n    \"failure_mode\": \"fail_open\",\n    \"timeout_ms\": 100,\n    \"priority\": {}\n  }}\n}}",
+            points_json, priority
+        )
+    }
+
+    async fn first_discovered_tool() -> Option<(String, PathBuf)> {
+        let tools = super::discover_dev_tools().await.ok()?;
+        tools
+            .into_iter()
+            .next()
+            .map(|(name, discovered)| (name, discovered.wasm_path))
+    }
 
     #[tokio::test]
     async fn test_discover_tools_empty_dir() {
@@ -596,6 +656,60 @@ mod tests {
     fn test_tools_src_dir_default() {
         let dir = super::tools_src_dir();
         assert!(dir.ends_with("tools-src"));
+    }
+
+    #[tokio::test]
+    async fn test_load_from_files_registers_wasm_hooks() {
+        let Some((name, source_wasm)) = first_discovered_tool().await else {
+            return;
+        };
+
+        let runtime = Arc::new(WasmToolRuntime::new(WasmRuntimeConfig::for_testing()).unwrap());
+        let registry = Arc::new(ToolRegistry::new());
+        let hook_registry = Arc::new(HookRegistry::new());
+
+        let dir = TempDir::new().unwrap();
+        let wasm_path = dir.path().join(format!("{}.wasm", name));
+        std::fs::copy(source_wasm, &wasm_path).unwrap();
+
+        let capabilities_path = dir.path().join(format!("{}.capabilities.json", name));
+        let mut cap_file = std::fs::File::create(&capabilities_path).unwrap();
+        cap_file
+            .write_all(hooks_json(&["beforeInbound"], 12).as_bytes())
+            .unwrap();
+
+        let loader = WasmToolLoader::new(runtime, registry).with_hooks(hook_registry.clone());
+        loader
+            .load_from_files(&name, &wasm_path, Some(capabilities_path.as_path()))
+            .await
+            .unwrap();
+
+        let hooks = hook_registry.list().await;
+        assert!(hooks.contains(&format!("wasm:{}", name)));
+    }
+
+    #[tokio::test]
+    async fn test_load_from_files_without_hooks_does_not_register() {
+        let Some((name, source_wasm)) = first_discovered_tool().await else {
+            return;
+        };
+
+        let runtime = Arc::new(WasmToolRuntime::new(WasmRuntimeConfig::for_testing()).unwrap());
+        let registry = Arc::new(ToolRegistry::new());
+        let hook_registry = Arc::new(HookRegistry::new());
+
+        let dir = TempDir::new().unwrap();
+        let wasm_path = dir.path().join(format!("{}.wasm", name));
+        std::fs::copy(source_wasm, &wasm_path).unwrap();
+
+        let loader = WasmToolLoader::new(runtime, registry).with_hooks(hook_registry.clone());
+        loader
+            .load_from_files(&name, &wasm_path, None)
+            .await
+            .unwrap();
+
+        let hooks = hook_registry.list().await;
+        assert!(!hooks.contains(&format!("wasm:{}", name)));
     }
 
     #[tokio::test]
