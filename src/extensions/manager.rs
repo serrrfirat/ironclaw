@@ -135,7 +135,7 @@ impl ExtensionManager {
             let kind = kind_hint.unwrap_or_else(|| infer_kind_from_url(url));
             return match kind {
                 ExtensionKind::McpServer => self.install_mcp_from_url(name, url).await,
-                ExtensionKind::WasmTool => self.install_wasm_tool_from_url(name, url).await,
+                ExtensionKind::WasmTool => self.install_wasm_tool_from_url(name, url, None).await,
                 ExtensionKind::WasmChannel => {
                     Err(ExtensionError::InstallFailed(
                         "WASM channel installation from URL not yet supported. \
@@ -362,8 +362,11 @@ impl ExtensionManager {
                 self.install_mcp_from_url(&entry.name, &url).await
             }
             ExtensionKind::WasmTool => match &entry.source {
-                ExtensionSource::WasmDownload { wasm_url, .. } => {
-                    self.install_wasm_tool_from_url(&entry.name, wasm_url).await
+                ExtensionSource::WasmDownload {
+                    wasm_url, sha256, ..
+                } => {
+                    self.install_wasm_tool_from_url(&entry.name, wasm_url, sha256.as_deref())
+                        .await
                 }
                 _ => Err(ExtensionError::InstallFailed(
                     "WASM tool entry has no download URL".to_string(),
@@ -410,6 +413,7 @@ impl ExtensionManager {
         &self,
         name: &str,
         url: &str,
+        expected_sha256: Option<&str>,
     ) -> Result<InstallResult, ExtensionError> {
         // Download the WASM binary
         let client = reqwest::Client::builder()
@@ -434,6 +438,26 @@ impl ExtensionManager {
             .bytes()
             .await
             .map_err(|e| ExtensionError::DownloadFailed(e.to_string()))?;
+
+        // Verify SHA-256 integrity when a checksum is available.
+        if let Some(expected) = expected_sha256 {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let actual = format!("{:x}", hasher.finalize());
+            if actual != expected.to_lowercase() {
+                return Err(ExtensionError::IntegrityCheckFailed(format!(
+                    "SHA-256 mismatch for '{}': expected {} but got {}",
+                    name, expected, actual
+                )));
+            }
+            tracing::info!("SHA-256 verified for '{}' ({})", name, &actual[..12]);
+        } else {
+            tracing::warn!(
+                "No SHA-256 checksum for '{}'; skipping integrity verification",
+                name
+            );
+        }
 
         // Ensure tools directory exists
         tokio::fs::create_dir_all(&self.wasm_tools_dir)

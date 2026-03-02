@@ -22,9 +22,7 @@ use crate::channels::wasm::{
 use crate::llm::{SessionConfig, SessionManager};
 use crate::secrets::SecretsCrypto;
 use crate::settings::{KeySource, Settings};
-use crate::setup::channels::{
-    SecretsContext, setup_http, setup_telegram, setup_tunnel, setup_wasm_channel,
-};
+use crate::setup::channels::{SecretsContext, setup_http, setup_tunnel, setup_wasm_channel};
 use crate::setup::prompts::{
     confirm, input, optional_input, print_error, print_header, print_info, print_step,
     print_success, select_many, select_one,
@@ -676,29 +674,19 @@ impl SetupWizard {
         let discovered_by_name: HashMap<String, ChannelCapabilitiesFile> =
             discovered_channels.into_iter().collect();
 
-        // Process selected WASM channels
+        // Process selected WASM channels using their capabilities files
         let mut enabled_wasm_channels = Vec::new();
         for channel_name in selected_wasm_channels {
             println!();
             if let Some(ref ctx) = secrets {
                 let result = if let Some(cap_file) = discovered_by_name.get(&channel_name) {
-                    if !cap_file.setup.required_secrets.is_empty() {
-                        setup_wasm_channel(ctx, &channel_name, &cap_file.setup)
-                            .await
-                            .map_err(SetupError::Channel)?
-                    } else if channel_name == "telegram" {
-                        let telegram_result = setup_telegram(ctx).await.map_err(SetupError::Channel)?;
-                        crate::setup::channels::WasmChannelSetupResult {
-                            enabled: telegram_result.enabled,
-                            channel_name: "telegram".to_string(),
-                        }
-                    } else {
-                        print_info(&format!("No setup configuration found for {}", channel_name));
-                        crate::setup::channels::WasmChannelSetupResult {
-                            enabled: true,
-                            channel_name: channel_name.clone(),
-                        }
-                    }
+                    // Use the generic setup flow driven by the capabilities file's
+                    // setup.required_secrets section.  This works for every channel
+                    // (Telegram, Slack, WhatsApp, etc.) as long as its capabilities
+                    // file declares what secrets it needs.
+                    setup_wasm_channel(ctx, &channel_name, &cap_file.setup)
+                        .await
+                        .map_err(SetupError::Channel)?
                 } else {
                     print_info(&format!(
                         "Channel '{}' is selected but not available on disk.",

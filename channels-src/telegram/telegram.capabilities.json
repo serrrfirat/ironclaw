@@ -2,6 +2,22 @@
   "type": "channel",
   "name": "telegram",
   "description": "Telegram Bot API channel for receiving and responding to Telegram messages",
+  "setup": {
+    "required_secrets": [
+      {
+        "name": "telegram_bot_token",
+        "prompt": "Enter your Telegram Bot Token (from @BotFather)",
+        "validation": "^[0-9]+:[A-Za-z0-9_-]+$"
+      },
+      {
+        "name": "telegram_webhook_secret",
+        "prompt": "Webhook secret (leave empty to auto-generate)",
+        "optional": true,
+        "auto_generate": { "length": 32 }
+      }
+    ],
+    "validation_endpoint": "https://api.telegram.org/bot{telegram_bot_token}/getMe"
+  },
   "capabilities": {
     "http": {
       "allowlist": [

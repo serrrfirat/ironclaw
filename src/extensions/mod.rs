@@ -76,6 +76,11 @@ pub enum ExtensionSource {
         wasm_url: String,
         #[serde(default)]
         capabilities_url: Option<String>,
+        /// Optional SHA-256 hex digest for integrity verification.
+        /// When present the downloaded artifact is checked against this value.
+        /// When absent the install proceeds with a warning.
+        #[serde(default)]
+        sha256: Option<String>,
     },
     /// Build from source repository.
     WasmBuildable {
@@ -215,6 +220,9 @@ pub enum ExtensionError {
 
     #[error("Download failed: {0}")]
     DownloadFailed(String),
+
+    #[error("Integrity check failed: {0}")]
+    IntegrityCheckFailed(String),
 
     #[error("Config error: {0}")]
     Config(String),

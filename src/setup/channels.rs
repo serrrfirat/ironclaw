@@ -54,14 +54,6 @@ impl SecretsContext {
     }
 }
 
-/// Result of Telegram setup.
-#[derive(Debug, Clone)]
-pub struct TelegramSetupResult {
-    pub enabled: bool,
-    pub bot_username: Option<String>,
-    pub webhook_secret: Option<String>,
-}
-
 /// Telegram Bot API response for getMe.
 #[derive(Debug, Deserialize)]
 struct TelegramGetMeResponse {
@@ -74,77 +66,6 @@ struct TelegramUser {
     username: Option<String>,
     #[allow(dead_code)]
     first_name: String,
-}
-
-/// Set up Telegram bot channel.
-///
-/// Guides the user through:
-/// 1. Creating a bot with @BotFather
-/// 2. Entering the bot token
-/// 3. Validating the token
-/// 4. Saving the token to the database
-pub async fn setup_telegram(secrets: &SecretsContext) -> Result<TelegramSetupResult, String> {
-    println!("Telegram Setup:");
-    println!();
-    print_info("To create a Telegram bot:");
-    print_info("1. Open Telegram and message @BotFather");
-    print_info("2. Send /newbot and follow the prompts");
-    print_info("3. Copy the bot token (looks like 123456:ABC-DEF...)");
-    println!();
-
-    // Check if token already exists
-    if secrets.secret_exists("telegram_bot_token").await {
-        print_info("Existing Telegram token found in database.");
-        if !confirm("Replace existing token?", false).map_err(|e| e.to_string())? {
-            // Still offer to configure webhook secret if not already done
-            let webhook_secret = setup_telegram_webhook_secret(secrets).await?;
-            return Ok(TelegramSetupResult {
-                enabled: true,
-                bot_username: None,
-                webhook_secret,
-            });
-        }
-    }
-
-    let token = secret_input("Bot token (from @BotFather)").map_err(|e| e.to_string())?;
-
-    // Validate the token
-    print_info("Validating bot token...");
-
-    match validate_telegram_token(&token).await {
-        Ok(username) => {
-            print_success(&format!(
-                "Bot validated: @{}",
-                username.as_deref().unwrap_or("unknown")
-            ));
-
-            // Save to database
-            secrets.save_secret("telegram_bot_token", &token).await?;
-            print_success("Token saved to database");
-
-            // Offer webhook secret configuration
-            let webhook_secret = setup_telegram_webhook_secret(secrets).await?;
-
-            Ok(TelegramSetupResult {
-                enabled: true,
-                bot_username: username,
-                webhook_secret,
-            })
-        }
-        Err(e) => {
-            print_error(&format!("Token validation failed: {}", e));
-
-            if confirm("Try again?", true).map_err(|e| e.to_string())? {
-                Box::pin(setup_telegram(secrets)).await
-            } else {
-                Ok(TelegramSetupResult {
-                    enabled: false,
-                    bot_username: None,
-                    webhook_secret: None,
-                })
-            }
-        }
-    }
 }
 
 /// Set up a tunnel for exposing the agent to the internet.
@@ -205,40 +126,6 @@ pub fn setup_tunnel() -> Result<Option<String>, String> {
     print_info("You can also set TUNNEL_URL environment variable to override.");
 
     Ok(Some(tunnel_url))
-}
-
-/// Set up Telegram webhook secret for signature validation.
-///
-/// Returns the webhook secret if configured.
-async fn setup_telegram_webhook_secret(secrets: &SecretsContext) -> Result<Option<String>, String> {
-    // Check if tunnel is configured
-    let settings = Settings::load();
-    if settings.tunnel.public_url.is_none() {
-        print_info("");
-        print_info("No tunnel configured. Telegram will use polling mode (30s+ delay).");
-        print_info("Run setup again to configure a tunnel for instant delivery.");
-        return Ok(None);
-    }
-
-    println!();
-    print_info("Telegram Webhook Security:");
-    print_info("A webhook secret adds an extra layer of security by validating");
-    print_info("that requests actually come from Telegram's servers.");
-
-    if !confirm("Generate a webhook secret?", true).map_err(|e| e.to_string())? {
-        return Ok(None);
-    }
-
-    let secret = generate_webhook_secret();
-    secrets
-        .save_secret(
-            "telegram_webhook_secret",
-            &SecretString::from(secret.clone()),
-        )
-        .await?;
-    print_success("Webhook secret generated and saved");
-
-    Ok(Some(secret))
 }
 
 /// Validate a Telegram bot token by calling the getMe API.
