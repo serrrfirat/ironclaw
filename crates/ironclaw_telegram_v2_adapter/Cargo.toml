@@ -24,6 +24,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 http = "1"
+ironclaw_conversations = { path = "../ironclaw_conversations", version = "0.1.0", features = ["libsql"] }
 ironclaw_host_api = { path = "../ironclaw_host_api", version = "0.1.0" }
 ironclaw_product_adapters = { path = "../ironclaw_product_adapters", version = "0.1.0", features = ["test-support"] }
+libsql = { version = "0.6", default-features = false, features = ["core", "replication", "remote", "tls"] }
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
