@@ -11,11 +11,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ironclaw_events::{
     DurableAuditLog, DurableEventLog, EventCursor, EventError, EventLogEntry, EventStreamKey,
-    ReadScope, RuntimeEvent, RuntimeEventKind, sanitize_error_kind,
+    ReadScope, RuntimeEvent, RuntimeEventKind, UNCLASSIFIED_ERROR_KIND, sanitize_error_kind,
 };
 use ironclaw_host_api::{
     ApprovalRequestId, AuditEnvelope, AuditEventId, AuditStage, CapabilityId, ExtensionId,
-    InvocationId, ProcessId, ResourceScope, RuntimeKind, ThreadId, Timestamp,
+    InvocationId, OBLIGATION_EVALUATION_ORDER, ObligationKind, ProcessId, ResourceScope,
+    RuntimeKind, ThreadId, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -792,9 +793,59 @@ fn project_audit_entry(entry: &EventLogEntry<AuditEnvelope>) -> AuditProjectionE
         result_status: audit
             .result
             .as_ref()
-            .and_then(|result| result.status.clone())
-            .map(sanitize_error_kind),
+            .and_then(|result| result.status.as_deref())
+            .map(sanitize_audit_status),
         output_bytes: audit.result.as_ref().and_then(|result| result.output_bytes),
+    }
+}
+
+fn sanitize_audit_status(status: &str) -> String {
+    let mut seen = HashSet::new();
+    let mut sanitized = String::new();
+
+    for (index, label) in status.split(',').enumerate() {
+        if index >= OBLIGATION_EVALUATION_ORDER.len() {
+            return UNCLASSIFIED_ERROR_KIND.to_string();
+        }
+
+        let Some(kind) = obligation_kind_from_status_label(label) else {
+            return UNCLASSIFIED_ERROR_KIND.to_string();
+        };
+        if !seen.insert(kind) {
+            return UNCLASSIFIED_ERROR_KIND.to_string();
+        }
+
+        if index > 0 {
+            sanitized.push(',');
+        }
+        sanitized.push_str(label);
+    }
+
+    if seen.is_empty() {
+        UNCLASSIFIED_ERROR_KIND.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn obligation_kind_from_status_label(label: &str) -> Option<ObligationKind> {
+    OBLIGATION_EVALUATION_ORDER
+        .iter()
+        .copied()
+        .find(|kind| obligation_status_label(*kind) == label)
+}
+
+fn obligation_status_label(kind: ObligationKind) -> &'static str {
+    match kind {
+        ObligationKind::ReserveResources => "reserve_resources",
+        ObligationKind::UseScopedMounts => "use_scoped_mounts",
+        ObligationKind::ApplyNetworkPolicy => "apply_network_policy",
+        ObligationKind::InjectSecretOnce => "inject_secret_once",
+        ObligationKind::AuditBefore => "audit_before",
+        ObligationKind::RedactOutput => "redact_output",
+        ObligationKind::EnforceResourceCeiling => "enforce_resource_ceiling",
+        ObligationKind::EnforceOutputLimit => "enforce_output_limit",
+        ObligationKind::AuditAfter => "audit_after",
     }
 }
 
