@@ -129,10 +129,14 @@ const WS0_COMPOSITION_SHARE_BP: usize = 658;
 /// run-acts-as-invoker: the acting-user scope helper and shared-admission
 /// wiring add +64 production LOC on the merged tree. Manifest ceiling and
 /// observed value move with this record.
-/// ✎ Re-recorded 40_811 → 40_861 on 2026-08-08 for #7131 on the merged
-/// tree: the run-failure settlement observer (+50 governed LOC). Manifest
-/// ceiling and observed value move with this record.
-const COMPOSITION_ABSOLUTE_SRC_LOC: usize = 40_861;
+/// ✎ Re-recorded 40_811 → 41_135 on 2026-08-08 for #7171 (skill-bundle staging plus the
+/// host-reachability root map), paired with the `[gate].loc_ceiling` raise in the same commit --
+/// this ratchet fails when the two disagree.
+/// ✎ Re-seeded 41_135 → 41_324 on 2026-08-10 after merging #7131 (run-failure settlement
+/// observer wiring) onto the #7171 tree: +189 governed LOC measured on the merged tree with
+/// `bash scripts/ci/check-composition-budget.sh --print`. Manifest ceiling and observed value
+/// move with this record.
+const COMPOSITION_ABSOLUTE_SRC_LOC: usize = 41_324;
 
 /// Composition dispatch, from the same `--print` run: "composition dispatch:
 /// 827 Arc<dyn> (governed prod, excl slack/extension_host)".
